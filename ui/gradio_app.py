@@ -5,6 +5,7 @@ import gradio as gr
 from core.sam_manager import SAMManager
 from core.dataset_exporter import DatasetExporter
 from core.mask_utils import COLORS, postprocess_mask, get_refinement_points
+from core.batch_processor import process_batch_yolo
 
 def create_app():
     # Initialize Core Engines
@@ -15,9 +16,12 @@ def create_app():
         gr.Markdown("# 🧠 Segment Anything Model (SAM) - Interactive Dataset Generator")
         gr.Markdown("Upload images, dynamically segment objects via points, assign class labels, and export datasets directly to your device or Kaggle/Colab.")
         
-        with gr.Row():
-            with gr.Column(scale=1):
-                gr.Markdown("### 1. Upload & Select Images")
+        with gr.Tabs():
+            with gr.TabItem("Interactive Annotation"):
+                # --- Tab 1: Interactive ---
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 1. Upload & Select Images")
                 file_uploader = gr.File(file_count="multiple", label="Upload Local Images", file_types=["image"])
                 file_list_dropdown = gr.Dropdown(choices=[], label="Select Opened Image to Annotate", interactive=True)
                 
@@ -62,18 +66,37 @@ def create_app():
                     delete_idx_input = gr.Number(label="Object ID to Delete", precision=0)
                     delete_btn = gr.Button("Delete Mask by ID", variant="stop")
                 
-        # Session State Variables
-        dataset_state = gr.State({}) # Data schema: { filepath: {"objects": [{"mask": ndarray, "class_name": str}]} }
-        current_image_path = gr.State(None)
-        current_image_np = gr.State(None)
+                # Session State Variables
+                dataset_state = gr.State({}) # Data schema: { filepath: {"objects": [{"mask": ndarray, "class_name": str}]} }
+                current_image_path = gr.State(None)
+                current_image_np = gr.State(None)
+                
+                # Point and segmentation states
+                points_state = gr.State([])
+                labels_state = gr.State([])
+                box_state = gr.State([]) # Stores [x1, y1, x2, y2]
+                current_mask_state = gr.State(None)
+                    
+            with gr.TabItem("Batch Conversion (Detection -> Segmentation)"):
+                # --- Tab 2: Batch Processing ---
+                gr.Markdown("Convert a YOLO-formatted object detection dataset into exact semantic masks using SAM in one click.")
+                
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("**Step 1: Upload Archive**")
+                        gr.Markdown("Upload a single `.zip` containing your `images` and `labels` directories directly.")
+                        batch_zip_uploader = gr.File(label="Upload Dataset ZIP", file_types=[".zip"])
+                        
+                        gr.Markdown("**Step 2: Processing**")
+                        batch_start_btn = gr.Button("Start Conversion", variant="primary")
+                        batch_export_file = gr.File(label="Download Generated Segments ZIP", interactive=False)
+                        
+                    with gr.Column(scale=1):
+                        gr.Markdown("**Step 3: Preview Output Selection**")
+                        batch_gallery = gr.Gallery(label="Samples from Conversion", columns=2, rows=2, object_fit="contain", height="auto")
         
-        # Point and segmentation states
-        points_state = gr.State([])
-        labels_state = gr.State([])
-        box_state = gr.State([]) # Stores [x1, y1, x2, y2]
-        current_mask_state = gr.State(None)
-        
-        # --- Helper for rendering ---
+        # -------------------------------------------------------------------------------------------------------------------------
+        # --- TAB 1 : Helper Methods ---
         def render_image(image_np, saved_objects, current_mask, points, labels, box):
             if image_np is None:
                 return None
@@ -326,6 +349,64 @@ def create_app():
             build_dataset_export,
             inputs=[dataset_state],
             outputs=[export_file]
+        )
+        
+        
+        # -------------------------------------------------------------------------------------------------------------------------
+        # --- TAB 2 : Helper Methods ---
+        
+        def run_batch_conversion(zip_file_obj):
+            if zip_file_obj is None:
+                gr.Warning("Upload a dataset .zip archive first.")
+                return None, None
+                
+            import zipfile
+            import tempfile
+            import shutil
+            
+            temp_dir = tempfile.mkdtemp()
+            # 1. Unzip uploaded package
+            with zipfile.ZipFile(zip_file_obj.name, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+                
+            # Locate directories dynamically inside the archive structure
+            extracted_images_dir = None
+            extracted_labels_dir = None
+            
+            for root, dirs, files in os.walk(temp_dir):
+                if 'images' in dirs and not extracted_images_dir:
+                    extracted_images_dir = os.path.join(root, 'images')
+                if 'labels' in dirs and not extracted_labels_dir:
+                    extracted_labels_dir = os.path.join(root, 'labels')
+                    
+            if not extracted_images_dir or not extracted_labels_dir:
+                gr.Warning("Invalid ZIP structure. Could not find 'images' and 'labels' folders.")
+                shutil.rmtree(temp_dir)
+                return None, None
+                
+            # 2. Fire YOLO -> Mask conversion
+            try:
+                out_zip, previews = process_batch_yolo(
+                    extracted_images_dir,
+                    extracted_labels_dir,
+                    sam_manager,
+                    exporter
+                )
+            except Exception as e:
+                gr.Warning(f"Conversion failed: {str(e)}")
+                shutil.rmtree(temp_dir)
+                return None, None
+                
+            # Clean up temp
+            shutil.rmtree(temp_dir)
+            
+            return out_zip, previews
+            
+        # --- Interface Connectors Tab 2 ---
+        batch_start_btn.click(
+            run_batch_conversion,
+            inputs=[batch_zip_uploader],
+            outputs=[batch_export_file, batch_gallery]
         )
         
     return app
