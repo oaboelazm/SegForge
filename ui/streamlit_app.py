@@ -261,48 +261,69 @@ with tab_batch:
             import shutil
             
             temp_dir = tempfile.mkdtemp()
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            status_text.text("Extracting ZIP archive...")
             with zipfile.ZipFile(batch_zip, 'r') as zip_ref:
                 zip_ref.extractall(temp_dir)
                 
             extracted_images_dir = None
             extracted_labels_dir = None
             
+            status_text.text("Analyzing dataset structure...")
             for root, dirs, files in os.walk(temp_dir):
-                if 'images' in dirs and not extracted_images_dir:
-                    extracted_images_dir = os.path.join(root, 'images')
-                if 'labels' in dirs and not extracted_labels_dir:
-                    extracted_labels_dir = os.path.join(root, 'labels')
+                if 'images' in [d.lower() for d in dirs] and not extracted_images_dir:
+                    d_idx = [d.lower() for d in dirs].index('images')
+                    extracted_images_dir = os.path.join(root, dirs[d_idx])
+                if 'labels' in [d.lower() for d in dirs] and not extracted_labels_dir:
+                    d_idx = [d.lower() for d in dirs].index('labels')
+                    extracted_labels_dir = os.path.join(root, dirs[d_idx])
                     
             if not extracted_images_dir or not extracted_labels_dir:
-                st.error("Invalid ZIP structure. Could not find 'images' and 'labels' folders.")
+                for root, dirs, files in os.walk(temp_dir):
+                    has_images = any(f.lower().endswith(('.jpg', '.jpeg', '.png')) for f in files)
+                    has_labels = any(f.lower().endswith('.txt') for f in files)
+                    if has_images and not extracted_images_dir:
+                        extracted_images_dir = root
+                    if has_labels and not extracted_labels_dir:
+                        extracted_labels_dir = root
+
+            if not extracted_images_dir or not extracted_labels_dir:
+                st.error("Invalid ZIP structure. Could not find images and labels folders.")
             else:
-                with st.spinner("Processing dataset through SAM. This can take several minutes depending on dataset scale..."):
-                    try:
-                        out_zip, previews = process_batch_yolo(
-                            extracted_images_dir,
-                            extracted_labels_dir,
-                            sam_manager,
-                            exporter
+                try:
+                    def update_progress(p, desc):
+                        progress_bar.progress(p)
+                        status_text.text(desc)
+
+                    out_zip, previews = process_batch_yolo(
+                        extracted_images_dir,
+                        extracted_labels_dir,
+                        sam_manager,
+                        exporter,
+                        progress_callback=update_progress
+                    )
+                    
+                    st.success("Conversion Complete!")
+                    with open(out_zip, "rb") as fp:
+                        st.download_button(
+                            label="⬇️ Download Exported Dataset ZIP",
+                            data=fp,
+                            file_name="batch_segmented_dataset.zip",
+                            mime="application/zip",
                         )
                         
-                        st.success("Conversion Complete!")
-                        with open(out_zip, "rb") as fp:
-                            st.download_button(
-                                label="⬇️ Download Exported Dataset ZIP",
-                                data=fp,
-                                file_name="batch_segmented_dataset.zip",
-                                mime="application/zip",
-                            )
-                            
-                        # Show visual validation gallery
-                        if previews:
-                            st.markdown("### Visual Validation Sample")
-                            cols = st.columns(2)
-                            for i, view in enumerate(previews):
-                                with cols[i % 2]:
-                                    st.image(view, use_container_width=True)
+                    if previews:
+                        st.markdown("### Visual Validation Sample")
+                        cols = st.columns(2)
+                        for i, view in enumerate(previews):
+                            with cols[i % 2]:
+                                st.image(view, use_container_width=True)
                                     
-                    except Exception as e:
-                        st.error(f"Failed processing: {str(e)}")
+                except Exception as e:
+                    st.error(f"Failed processing: {str(e)}")
                         
             shutil.rmtree(temp_dir)
+            status_text.empty()
+            progress_bar.empty()

@@ -15,56 +15,55 @@ def create_app():
     with gr.Blocks(title="SAM Image Annotator") as app:
         gr.Markdown("# 🧠 Segment Anything Model (SAM) - Interactive Dataset Generator")
         gr.Markdown("Upload images, dynamically segment objects via points, assign class labels, and export datasets directly to your device or Kaggle/Colab.")
-        
         with gr.Tabs():
             with gr.TabItem("Interactive Annotation"):
                 # --- Tab 1: Interactive ---
                 with gr.Row():
                     with gr.Column(scale=1):
                         gr.Markdown("### 1. Upload & Select Images")
-                file_uploader = gr.File(file_count="multiple", label="Upload Local Images", file_types=["image"])
-                file_list_dropdown = gr.Dropdown(choices=[], label="Select Opened Image to Annotate", interactive=True)
-                
-                gr.Markdown("### 2. Segmentation Settings")
-                with gr.Group():
-                    point_type_radio = gr.Radio(
-                        choices=["Positive Point", "Negative Point", "Bounding Box"],
-                        value="Positive Point",
-                        label="Selection Mode"
-                    )
-                    
-                    with gr.Row():
-                        generate_mask_btn = gr.Button("Generate Mask", variant="primary")
-                        refine_mask_btn = gr.Button("Refine Mask", variant="secondary")
+                        file_uploader = gr.File(file_count="multiple", label="Upload Local Images", file_types=["image"])
+                        file_list_dropdown = gr.Dropdown(choices=[], label="Select Opened Image to Annotate", interactive=True)
                         
-                    with gr.Row():
-                        clear_points_btn = gr.Button("Clear Prompts")
-                        clear_mask_btn = gr.Button("Clear Mask")
-                        reset_img_btn = gr.Button("Reset Image", variant="stop")
-                
-                gr.Markdown("### 3. Mask Management")
-                with gr.Group():
-                    class_name_input = gr.Textbox(label="Class Label", placeholder="e.g., car, person, dog")
-                    save_mask_btn = gr.Button("Save Object & Mask", variant="primary")
-                
-                gr.Markdown("### 4. Export")
-                with gr.Group():
-                    export_btn = gr.Button("Export Dataset (COCO, YOLO, PNG)", variant="primary")
-                    export_file = gr.File(label="Download Formatted Dataset ZIP")
-            
-            with gr.Column(scale=2):
-                image_viewer = gr.Image(type="numpy", label="Interactive View (Click/Drag depending on mode)")
-                
-                objects_display = gr.Dataframe(
-                    headers=["ID", "Class Name", "Status"],
-                    col_count=(3, "fixed"),
-                    label="Saved Objects list for current image",
-                    interactive=False
-                )
-                
-                with gr.Row():
-                    delete_idx_input = gr.Number(label="Object ID to Delete", precision=0)
-                    delete_btn = gr.Button("Delete Mask by ID", variant="stop")
+                        gr.Markdown("### 2. Segmentation Settings")
+                        with gr.Group():
+                            point_type_radio = gr.Radio(
+                                choices=["Positive Point", "Negative Point", "Bounding Box"],
+                                value="Positive Point",
+                                label="Selection Mode"
+                            )
+                            
+                            with gr.Row():
+                                generate_mask_btn = gr.Button("Generate Mask", variant="primary")
+                                refine_mask_btn = gr.Button("Refine Mask", variant="secondary")
+                                
+                            with gr.Row():
+                                clear_points_btn = gr.Button("Clear Prompts")
+                                clear_mask_btn = gr.Button("Clear Mask")
+                                reset_img_btn = gr.Button("Reset Image", variant="stop")
+                        
+                        gr.Markdown("### 3. Mask Management")
+                        with gr.Group():
+                            class_name_input = gr.Textbox(label="Class Label", placeholder="e.g., car, person, dog")
+                            save_mask_btn = gr.Button("Save Object & Mask", variant="primary")
+                        
+                        gr.Markdown("### 4. Export")
+                        with gr.Group():
+                            export_btn = gr.Button("Export Dataset (COCO, YOLO, PNG)", variant="primary")
+                            export_file = gr.File(label="Download Formatted Dataset ZIP")
+                    
+                    with gr.Column(scale=2):
+                        image_viewer = gr.Image(type="numpy", label="Interactive View (Click/Drag depending on mode)")
+                        
+                        objects_display = gr.Dataframe(
+                            headers=["ID", "Class Name", "Status"],
+                            col_count=(3, "fixed"),
+                            label="Saved Objects list for current image",
+                            interactive=False
+                        )
+                        
+                        with gr.Row():
+                            delete_idx_input = gr.Number(label="Object ID to Delete", precision=0)
+                            delete_btn = gr.Button("Delete Mask by ID", variant="stop")
                 
                 # Session State Variables
                 dataset_state = gr.State({}) # Data schema: { filepath: {"objects": [{"mask": ndarray, "class_name": str}]} }
@@ -355,7 +354,7 @@ def create_app():
         # -------------------------------------------------------------------------------------------------------------------------
         # --- TAB 2 : Helper Methods ---
         
-        def run_batch_conversion(zip_file_obj):
+        def run_batch_conversion(zip_file_obj, progress=gr.Progress()):
             if zip_file_obj is None:
                 gr.Warning("Upload a dataset .zip archive first.")
                 return None, None
@@ -365,38 +364,59 @@ def create_app():
             import shutil
             
             temp_dir = tempfile.mkdtemp()
+            progress(0, desc="Extracting ZIP archive...")
+            
             # 1. Unzip uploaded package
             with zipfile.ZipFile(zip_file_obj.name, 'r') as zip_ref:
                 zip_ref.extractall(temp_dir)
                 
-            # Locate directories dynamically inside the archive structure
+            # Locate directories dynamically inside the archive structure (Search deeper)
             extracted_images_dir = None
             extracted_labels_dir = None
             
+            progress(0.1, desc="Analyzing dataset structure...")
             for root, dirs, files in os.walk(temp_dir):
-                if 'images' in dirs and not extracted_images_dir:
-                    extracted_images_dir = os.path.join(root, 'images')
-                if 'labels' in dirs and not extracted_labels_dir:
-                    extracted_labels_dir = os.path.join(root, 'labels')
+                # Search for 'images' and 'labels' folders
+                if 'images' in [d.lower() for d in dirs] and not extracted_images_dir:
+                    d_idx = [d.lower() for d in dirs].index('images')
+                    extracted_images_dir = os.path.join(root, dirs[d_idx])
+                if 'labels' in [d.lower() for d in dirs] and not extracted_labels_dir:
+                    d_idx = [d.lower() for d in dirs].index('labels')
+                    extracted_labels_dir = os.path.join(root, dirs[d_idx])
                     
+            # If not found, try to find any folder containing images and labels
             if not extracted_images_dir or not extracted_labels_dir:
-                gr.Warning("Invalid ZIP structure. Could not find 'images' and 'labels' folders.")
+                for root, dirs, files in os.walk(temp_dir):
+                    has_images = any(f.lower().endswith(('.jpg', '.jpeg', '.png')) for f in files)
+                    has_labels = any(f.lower().endswith('.txt') for f in files)
+                    if has_images and not extracted_images_dir:
+                        extracted_images_dir = root
+                    if has_labels and not extracted_labels_dir:
+                        extracted_labels_dir = root
+
+            if not extracted_images_dir or not extracted_labels_dir:
+                gr.Warning("Invalid ZIP structure. Could not find images and labels.")
                 shutil.rmtree(temp_dir)
                 return None, None
                 
             # 2. Fire YOLO -> Mask conversion
             try:
+                def update_progress(p, desc):
+                    progress(0.1 + p * 0.8, desc=desc)
+
                 out_zip, previews = process_batch_yolo(
                     extracted_images_dir,
                     extracted_labels_dir,
                     sam_manager,
-                    exporter
+                    exporter,
+                    progress_callback=update_progress
                 )
             except Exception as e:
                 gr.Warning(f"Conversion failed: {str(e)}")
                 shutil.rmtree(temp_dir)
                 return None, None
                 
+            progress(1.0, desc="Finishing up...")
             # Clean up temp
             shutil.rmtree(temp_dir)
             

@@ -4,7 +4,7 @@ import glob
 import numpy as np
 from PIL import Image
 
-def process_batch_yolo(images_dir, labels_dir, sam_manager, exporter, class_names=None):
+def process_batch_yolo(images_dir, labels_dir, sam_manager, exporter, class_names=None, progress_callback=None):
     """
     Reads all images in images_dir and their corresponding YOLO txt files in labels_dir.
     Applies SAM on each bounding box and collates them, returning the path of the exported ZIP
@@ -21,11 +21,30 @@ def process_batch_yolo(images_dir, labels_dir, sam_manager, exporter, class_name
     if not image_paths:
         raise ValueError("No images found in the uploaded directory.")
 
+    # Try to find class names if not provided
+    if not class_names:
+        # Look for classes.txt in images_dir, labels_dir, or their parent
+        possible_class_files = [
+            os.path.join(labels_dir, "classes.txt"),
+            os.path.join(os.path.dirname(labels_dir), "classes.txt"),
+            os.path.join(images_dir, "classes.txt"),
+            os.path.join(os.path.dirname(images_dir), "classes.txt"),
+            os.path.join(labels_dir, "_classes.txt")
+        ]
+        for cf in possible_class_files:
+            if os.path.exists(cf):
+                with open(cf, "r") as f:
+                    class_names = [line.strip() for line in f.readlines() if line.strip()]
+                break
+
     # We build the dataset dict using the exact same schema expected by `DatasetExporter`
     dataset_state = {}
     preview_images = []
-
-    for img_path in image_paths:
+    
+    total_images = len(image_paths)
+    for i, img_path in enumerate(image_paths):
+        if progress_callback:
+            progress_callback((i + 1) / total_images, f"Processing {os.path.basename(img_path)} ({i+1}/{total_images})")
         base_name = os.path.basename(img_path)
         name_no_ext, _ = os.path.splitext(base_name)
         label_path = os.path.join(labels_dir, f"{name_no_ext}.txt")
