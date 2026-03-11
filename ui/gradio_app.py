@@ -12,9 +12,9 @@ def create_app():
     sam_manager = SAMManager()
     exporter = DatasetExporter()
     
-    with gr.Blocks(title="SAM Image Annotator") as app:
-        gr.Markdown("# 🧠 Segment Anything Model (SAM) - Interactive Dataset Generator")
-        gr.Markdown("Upload images, dynamically segment objects via points, assign class labels, and export datasets directly to your device or Kaggle/Colab.")
+    with gr.Blocks(title="SegForge - SAM Dataset Engine") as app:
+        gr.Markdown("# 🧠 SegForge - Segment Anything Dataset Engine")
+        gr.Markdown("Interactive and Batch Dataset Generation powered by SAM.")
         with gr.Tabs():
             with gr.TabItem("Interactive Annotation"):
                 # --- Tab 1: Interactive ---
@@ -93,6 +93,10 @@ def create_app():
                     with gr.Column(scale=1):
                         gr.Markdown("**Step 3: Preview Output Selection**")
                         batch_gallery = gr.Gallery(label="Samples from Conversion", columns=2, rows=2, object_fit="contain", height="auto")
+                        randomize_samples_btn = gr.Button("🎲 Randomize Preview Samples", variant="secondary")
+                        
+                # Batch States
+                batch_previews_state = gr.State([]) # Stores the pool of up to 50 previews
         
         # -------------------------------------------------------------------------------------------------------------------------
         # --- TAB 1 : Helper Methods ---
@@ -370,32 +374,23 @@ def create_app():
             with zipfile.ZipFile(zip_file_obj.name, 'r') as zip_ref:
                 zip_ref.extractall(temp_dir)
                 
-            # Locate directories dynamically inside the archive structure (Search deeper)
-            extracted_images_dir = None
-            extracted_labels_dir = None
+            # Locate directories (Standard YOLO format requirement)
+            # Expecting 'images' and 'labels' folders
+            extracted_images_dir = os.path.join(temp_dir, 'images')
+            extracted_labels_dir = os.path.join(temp_dir, 'labels')
             
-            progress(0.1, desc="Analyzing dataset structure...")
-            for root, dirs, files in os.walk(temp_dir):
-                # Search for 'images' and 'labels' folders
-                if 'images' in [d.lower() for d in dirs] and not extracted_images_dir:
-                    d_idx = [d.lower() for d in dirs].index('images')
-                    extracted_images_dir = os.path.join(root, dirs[d_idx])
-                if 'labels' in [d.lower() for d in dirs] and not extracted_labels_dir:
-                    d_idx = [d.lower() for d in dirs].index('labels')
-                    extracted_labels_dir = os.path.join(root, dirs[d_idx])
-                    
-            # If not found, try to find any folder containing images and labels
-            if not extracted_images_dir or not extracted_labels_dir:
-                for root, dirs, files in os.walk(temp_dir):
-                    has_images = any(f.lower().endswith(('.jpg', '.jpeg', '.png')) for f in files)
-                    has_labels = any(f.lower().endswith('.txt') for f in files)
-                    if has_images and not extracted_images_dir:
-                        extracted_images_dir = root
-                    if has_labels and not extracted_labels_dir:
-                        extracted_labels_dir = root
+            # If not in root, check if they are inside a single top-level folder
+            if not os.path.exists(extracted_images_dir) or not os.path.exists(extracted_labels_dir):
+                top_level_items = os.listdir(temp_dir)
+                if len(top_level_items) == 1 and os.path.isdir(os.path.join(temp_dir, top_level_items[0])):
+                    sub_dir = os.path.join(temp_dir, top_level_items[0])
+                    extracted_images_dir = os.path.join(sub_dir, 'images')
+                    extracted_labels_dir = os.path.join(sub_dir, 'labels')
 
-            if not extracted_images_dir or not extracted_labels_dir:
-                gr.Warning("Invalid ZIP structure. Could not find images and labels.")
+            if not os.path.exists(extracted_images_dir) or not os.path.exists(extracted_labels_dir):
+                gr.Warning("Invalid YOLO ZIP structure. Ensure it contains 'images/' and 'labels/' folders.")
+                shutil.rmtree(temp_dir)
+                return None, None
                 shutil.rmtree(temp_dir)
                 return None, None
                 
@@ -420,13 +415,29 @@ def create_app():
             # Clean up temp
             shutil.rmtree(temp_dir)
             
-            return out_zip, previews
+            # Return active pool for randomization
+            import random
+            initial_samples = random.sample(previews, min(len(previews), 4))
+            return out_zip, previews, initial_samples
+
+        def on_randomize_previews(pool):
+            if not pool:
+                return None
+            import random
+            samples = random.sample(pool, min(len(pool), 4))
+            return samples
             
         # --- Interface Connectors Tab 2 ---
         batch_start_btn.click(
             run_batch_conversion,
             inputs=[batch_zip_uploader],
-            outputs=[batch_export_file, batch_gallery]
+            outputs=[batch_export_file, batch_previews_state, batch_gallery]
+        )
+        
+        randomize_samples_btn.click(
+            on_randomize_previews,
+            inputs=[batch_previews_state],
+            outputs=[batch_gallery]
         )
         
     return app

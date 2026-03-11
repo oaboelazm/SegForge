@@ -3,6 +3,7 @@ import cv2
 import glob
 import numpy as np
 from PIL import Image
+from core.mask_utils import COLORS
 
 def process_batch_yolo(images_dir, labels_dir, sam_manager, exporter, class_names=None, progress_callback=None):
     """
@@ -12,7 +13,7 @@ def process_batch_yolo(images_dir, labels_dir, sam_manager, exporter, class_name
     """
     
     # Supported image formats
-    exts = ["*.jpg", "*.jpeg", "*.png", "*.bmp"]
+    exts = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"]
     image_paths = []
     for e in exts:
         image_paths.extend(glob.glob(os.path.join(images_dir, e)))
@@ -102,16 +103,23 @@ def process_batch_yolo(images_dir, labels_dir, sam_manager, exporter, class_name
                     "class_name": c_name
                 })
                 
-                # Tint the mask green on the visual preview overlay
-                color = np.array([0, 255, 0], dtype=np.uint8)
+                # Get color based on class_id for consistency
+                color_tuple = COLORS[class_id % len(COLORS)]
+                color = np.array(color_tuple, dtype=np.uint8)
+                
+                # Tint the mask with the assigned color
                 mask_indices = mask > 0
                 mask_overlay[mask_indices] = color
+
+                # Draw class text on the overlay using the same color
+                text_pos = (x_min, max(y_min - 10, 20))
+                cv2.putText(preview_overlay, c_name, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_tuple, 2)
                 
         # Alpha blend the masks over the preview
         preview_overlay = cv2.addWeighted(preview_overlay, 1.0, mask_overlay, 0.5, 0)
         
-        # Keep up to 4 visual previews to pass back to the UI
-        if len(preview_images) < 4:
+        # Keep up to 50 visual previews to support UI randomization
+        if len(preview_images) < 50:
             preview_images.append(preview_overlay)
 
     # Trigger DatasetExporter on the fully synthesized bulk dataset

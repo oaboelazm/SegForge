@@ -54,8 +54,9 @@ def render_image(image_np, saved_objects, current_mask, points, labels):
         
     return overlay
 
-st.title("🧠 Segment Anything Model (SAM) - Interactive Dataset Generator")
-st.markdown("Upload images, dynamically segment objects via points, assign class labels, and export datasets directly to your device.")
+st.set_page_config(page_title="SegForge - SAM Dataset Engine", layout="wide")
+st.title("🧠 SegForge - Segment Anything Dataset Engine")
+st.markdown("Interactive and Batch Dataset Generation powered by SAM.")
 
 # Initialize session state variables
 if "dataset" not in st.session_state:
@@ -268,29 +269,19 @@ with tab_batch:
             with zipfile.ZipFile(batch_zip, 'r') as zip_ref:
                 zip_ref.extractall(temp_dir)
                 
-            extracted_images_dir = None
-            extracted_labels_dir = None
+            # Locate directories (Standard YOLO format requirement)
+            extracted_images_dir = os.path.join(temp_dir, 'images')
+            extracted_labels_dir = os.path.join(temp_dir, 'labels')
             
-            status_text.text("Analyzing dataset structure...")
-            for root, dirs, files in os.walk(temp_dir):
-                if 'images' in [d.lower() for d in dirs] and not extracted_images_dir:
-                    d_idx = [d.lower() for d in dirs].index('images')
-                    extracted_images_dir = os.path.join(root, dirs[d_idx])
-                if 'labels' in [d.lower() for d in dirs] and not extracted_labels_dir:
-                    d_idx = [d.lower() for d in dirs].index('labels')
-                    extracted_labels_dir = os.path.join(root, dirs[d_idx])
-                    
-            if not extracted_images_dir or not extracted_labels_dir:
-                for root, dirs, files in os.walk(temp_dir):
-                    has_images = any(f.lower().endswith(('.jpg', '.jpeg', '.png')) for f in files)
-                    has_labels = any(f.lower().endswith('.txt') for f in files)
-                    if has_images and not extracted_images_dir:
-                        extracted_images_dir = root
-                    if has_labels and not extracted_labels_dir:
-                        extracted_labels_dir = root
+            if not os.path.exists(extracted_images_dir) or not os.path.exists(extracted_labels_dir):
+                top_level_items = os.listdir(temp_dir)
+                if len(top_level_items) == 1 and os.path.isdir(os.path.join(temp_dir, top_level_items[0])):
+                    sub_dir = os.path.join(temp_dir, top_level_items[0])
+                    extracted_images_dir = os.path.join(sub_dir, 'images')
+                    extracted_labels_dir = os.path.join(sub_dir, 'labels')
 
-            if not extracted_images_dir or not extracted_labels_dir:
-                st.error("Invalid ZIP structure. Could not find images and labels folders.")
+            if not os.path.exists(extracted_images_dir) or not os.path.exists(extracted_labels_dir):
+                st.error("Invalid YOLO ZIP structure. Ensure it contains 'images/' and 'labels/' folders.")
             else:
                 try:
                     def update_progress(p, desc):
@@ -306,6 +297,8 @@ with tab_batch:
                     )
                     
                     st.success("Conversion Complete!")
+                    st.session_state["batch_previews"] = previews
+                    
                     with open(out_zip, "rb") as fp:
                         st.download_button(
                             label="⬇️ Download Exported Dataset ZIP",
@@ -314,12 +307,29 @@ with tab_batch:
                             mime="application/zip",
                         )
                         
-                    if previews:
-                        st.markdown("### Visual Validation Sample")
-                        cols = st.columns(2)
-                        for i, view in enumerate(previews):
-                            with cols[i % 2]:
-                                st.image(view, use_container_width=True)
+    if "batch_previews" in st.session_state and st.session_state["batch_previews"]:
+        st.markdown("---")
+        st.markdown("### Visual Validation Sample")
+        
+        import random
+        # Store selected indices in session state to maintain them across button clicks
+        if "selected_preview_indices" not in st.session_state:
+            st.session_state["selected_preview_indices"] = random.sample(
+                range(len(st.session_state["batch_previews"])), 
+                min(len(st.session_state["batch_previews"]), 4)
+            )
+            
+        if st.button("🎲 Randomize Preview Samples"):
+            st.session_state["selected_preview_indices"] = random.sample(
+                range(len(st.session_state["batch_previews"])), 
+                min(len(st.session_state["batch_previews"]), 4)
+            )
+            
+        cols = st.columns(2)
+        for i, idx in enumerate(st.session_state["selected_preview_indices"]):
+            view = st.session_state["batch_previews"][idx]
+            with cols[i % 2]:
+                st.image(view, use_container_width=True)
                                     
                 except Exception as e:
                     st.error(f"Failed processing: {str(e)}")
