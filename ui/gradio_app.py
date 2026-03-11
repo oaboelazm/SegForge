@@ -4,7 +4,7 @@ import numpy as np
 import gradio as gr
 from core.sam_manager import SAMManager
 from core.dataset_exporter import DatasetExporter
-from core.mask_utils import COLORS
+from core.mask_utils import COLORS, postprocess_mask, get_refinement_points
 
 def create_app():
     # Initialize Core Engines
@@ -24,11 +24,19 @@ def create_app():
                 gr.Markdown("### 2. Segmentation Settings")
                 with gr.Group():
                     point_type_radio = gr.Radio(
-                        choices=["Positive (Object)", "Negative (Background)"],
-                        value="Positive (Object)",
-                        label="Click Type"
+                        choices=["Positive Point", "Negative Point", "Bounding Box"],
+                        value="Positive Point",
+                        label="Selection Mode"
                     )
-                    clear_points_btn = gr.Button("Clear Current Clicks", variant="secondary")
+                    
+                    with gr.Row():
+                        generate_mask_btn = gr.Button("Generate Mask", variant="primary")
+                        refine_mask_btn = gr.Button("Refine Mask", variant="secondary")
+                        
+                    with gr.Row():
+                        clear_points_btn = gr.Button("Clear Prompts")
+                        clear_mask_btn = gr.Button("Clear Mask")
+                        reset_img_btn = gr.Button("Reset Image", variant="stop")
                 
                 gr.Markdown("### 3. Mask Management")
                 with gr.Group():
@@ -41,7 +49,7 @@ def create_app():
                     export_file = gr.File(label="Download Formatted Dataset ZIP")
             
             with gr.Column(scale=2):
-                image_viewer = gr.Image(type="numpy", label="Interactive View (Click to segment)")
+                image_viewer = gr.Image(type="numpy", label="Interactive View (Click/Drag depending on mode)")
                 
                 objects_display = gr.Dataframe(
                     headers=["ID", "Class Name", "Status"],
@@ -62,10 +70,11 @@ def create_app():
         # Point and segmentation states
         points_state = gr.State([])
         labels_state = gr.State([])
+        box_state = gr.State([]) # Stores [x1, y1, x2, y2]
         current_mask_state = gr.State(None)
         
         # --- Helper for rendering ---
-        def render_image(image_np, saved_objects, current_mask, points, labels):
+        def render_image(image_np, saved_objects, current_mask, points, labels, box):
             if image_np is None:
                 return None
             
@@ -85,9 +94,14 @@ def create_app():
                 mask_indices = current_mask > 0
                 overlay[mask_indices] = overlay[mask_indices] * 0.5 + color * 0.5
                 
+            # Draw bounding box
+            if len(box) == 4:
+                cv2.rectangle(overlay, (box[0], box[1]), (box[2], box[3]), (0, 0, 255), 2) # Blue Box in RGB natively? Gradio expects RGB, cv2 deals with BGR usually.
+                # In RGB arrays, Blue is (0, 0, 255). 
+                
             # Draw point click annotations
             for pt, lbl in zip(points, labels):
-                c = (0, 255, 0) if lbl == 1 else (255, 0, 0)
+                c = (0, 255, 0) if lbl == 1 else (255, 0, 0) # Green for positive, Red for negative
                 cv2.circle(overlay, (pt[0], pt[1]), 5, c, -1)
                 cv2.circle(overlay, (pt[0], pt[1]), 2, (255, 255, 255), -1)
                 
@@ -110,7 +124,7 @@ def create_app():
             
         def on_image_selected(filepath, dataset):
             if not filepath:
-                return None, None, [], [], None, None, []
+                return None, None, [], [], [], None, None, []
                 
             image_np = cv2.imread(filepath)
             # Gradio reads correctly if converted from BGR to RGB
@@ -123,24 +137,73 @@ def create_app():
             saved_objects = dataset.get(filepath, {}).get("objects", [])
             obj_data = [[i, obj["class_name"], "Saved"] for i, obj in enumerate(saved_objects)]
             
-            render = render_image(image_np, saved_objects, None, [], [])
-            return filepath, image_np, [], [], None, render, obj_data
+            render = render_image(image_np, saved_objects, None, [], [], [])
+            return filepath, image_np, [], [], [], None, render, obj_data
             
-        def on_image_click(evt: gr.SelectData, image_np, filepath, dataset, points, labels, point_type, current_mask):
+        def on_image_click(evt: gr.SelectData, image_np, filepath, dataset, points, labels, box, point_type, current_mask):
             if image_np is None:
-                return points, labels, current_mask, None
+                return points, labels, box, render_image(image_np, dataset.get(filepath, {}).get("objects", []), current_mask, points, labels, box)
                 
             x, y = evt.index
-            points.append([x, y])
-            labels.append(1 if "Positive" in point_type else 0)
             
-            # Run SAM inference
-            current_mask = sam_manager.predict(points, labels)
+            if "Bounding Box" in point_type:
+                # We need exactly 2 points for a box
+                if len(box) == 0 or len(box) == 4:
+                    # New box start
+                    box = [x, y]
+                elif len(box) == 2:
+                    # Form box [x_min, y_min, x_max, y_max]
+                    x1, y1 = box
+                    x_min, x_max = min(x1, x), max(x1, x)
+                    y_min, y_max = min(y1, y), max(y1, y)
+                    box = [x_min, y_min, x_max, y_max]
+            else:
+                # Point handling
+                points.append([x, y])
+                labels.append(1 if "Positive" in point_type else 0)
             
             saved_objects = dataset.get(filepath, {}).get("objects", [])
-            render = render_image(image_np, saved_objects, current_mask, points, labels)
+            render = render_image(image_np, saved_objects, current_mask, points, labels, box)
+            return points, labels, box, render
             
-            return points, labels, current_mask, render
+        def on_generate_mask(filepath, dataset, image_np, points, labels, box):
+            if image_np is None:
+                return None, None
+                
+            # Only predict if there are adequate prompts
+            valid_box = box if len(box) == 4 else None
+            if not points and not valid_box:
+                gr.Warning("Add at least one point or bounding box first!")
+                return None, render_image(image_np, dataset.get(filepath, {}).get("objects", []), None, points, labels, box)
+
+            raw_mask = sam_manager.predict(points=points, labels=labels, box=valid_box)
+            clean_mask = postprocess_mask(raw_mask)
+            
+            saved_objects = dataset.get(filepath, {}).get("objects", [])
+            render = render_image(image_np, saved_objects, clean_mask, points, labels, box)
+            
+            return clean_mask, render
+            
+        def on_refine_mask(filepath, dataset, image_np, points, labels, box, current_mask):
+            if current_mask is None:
+                gr.Warning("Generate a mask first before refining!")
+                return points, labels, current_mask, render_image(image_np, dataset.get(filepath, {}).get("objects", []), current_mask, points, labels, box)
+                
+            # 1. Derive boundary reflection points
+            neg_pts = get_refinement_points(current_mask, num_points=15, dilation_iters=2)
+            for pt in neg_pts:
+                points.append(list(pt))
+                labels.append(0) # Negative
+                
+            # 2. Re-trigger full prediction algorithm mapping all points iteratively
+            valid_box = box if len(box) == 4 else None
+            refined_mask = sam_manager.predict(points=points, labels=labels, box=valid_box)
+            refined_clean_mask = postprocess_mask(refined_mask)
+            
+            saved_objects = dataset.get(filepath, {}).get("objects", [])
+            render = render_image(image_np, saved_objects, refined_clean_mask, points, labels, box)
+            
+            return points, labels, refined_clean_mask, render
             
         def on_save_mask(filepath, dataset, current_mask, class_name, image_np, points):
             if current_mask is None or len(points) == 0:
@@ -159,20 +222,30 @@ def create_app():
             
             saved_objects = d[filepath]["objects"]
             obj_data = [[i, obj["class_name"], "Saved"] for i, obj in enumerate(saved_objects)]
-            render = render_image(image_np, saved_objects, None, [], [])
+            render = render_image(image_np, saved_objects, None, [], [], [])
             
             gr.Info(f"Saved mask for class '{class_name}'.")
             # Clear interaction states
-            return d, None, [], [], render, obj_data
+            return d, None, [], [], [], render, obj_data
             
-        def on_clear_points(filepath, dataset, image_np):
+        def on_clear_points(filepath, dataset, image_np, current_mask):
             saved_objects = dataset.get(filepath, {}).get("objects", [])
-            render = render_image(image_np, saved_objects, None, [], [])
-            return [], [], None, render
+            render = render_image(image_np, saved_objects, current_mask, [], [], [])
+            return [], [], [], render
             
-        def on_delete_mask(filepath, dataset, delete_idx, image_np):
+        def on_clear_mask(filepath, dataset, image_np, points, labels, box):
+            saved_objects = dataset.get(filepath, {}).get("objects", [])
+            render = render_image(image_np, saved_objects, None, points, labels, box)
+            return None, render
+            
+        def on_reset_image(filepath, dataset, image_np):
+            saved_objects = dataset.get(filepath, {}).get("objects", [])
+            render = render_image(image_np, saved_objects, None, [], [], [])
+            return [], [], [], None, render
+            
+        def on_delete_mask(filepath, dataset, delete_idx, image_np, points, labels, box, current_mask):
             if delete_idx is None:
-                return dataset, None, None
+                return dataset, render_image(image_np, dataset.get(filepath, {}).get("objects", []), current_mask, points, labels, box), [[i, obj["class_name"], "Saved"] for i, obj in enumerate(dataset.get(filepath, {}).get("objects", []))]
                 
             d = dataset.copy()
             if filepath in d and 0 <= int(delete_idx) < len(d[filepath]["objects"]):
@@ -181,7 +254,7 @@ def create_app():
             saved_objects = d.get(filepath, {}).get("objects", [])
             obj_data = [[i, obj["class_name"], "Saved"] for i, obj in enumerate(saved_objects)]
             
-            render = render_image(image_np, saved_objects, None, [], [])
+            render = render_image(image_np, saved_objects, current_mask, points, labels, box)
             return d, render, obj_data
             
         def build_dataset_export(dataset):
@@ -198,30 +271,54 @@ def create_app():
         file_list_dropdown.change(
             on_image_selected,
             inputs=[file_list_dropdown, dataset_state],
-            outputs=[current_image_path, current_image_np, points_state, labels_state, current_mask_state, image_viewer, objects_display]
+            outputs=[current_image_path, current_image_np, points_state, labels_state, box_state, current_mask_state, image_viewer, objects_display]
         )
         
         image_viewer.select(
             on_image_click,
-            inputs=[current_image_np, current_image_path, dataset_state, points_state, labels_state, point_type_radio, current_mask_state],
+            inputs=[current_image_np, current_image_path, dataset_state, points_state, labels_state, box_state, point_type_radio, current_mask_state],
+            outputs=[points_state, labels_state, box_state, image_viewer]
+        )
+        
+        generate_mask_btn.click(
+            on_generate_mask,
+            inputs=[current_image_path, dataset_state, current_image_np, points_state, labels_state, box_state],
+            outputs=[current_mask_state, image_viewer]
+        )
+        
+        refine_mask_btn.click(
+            on_refine_mask,
+            inputs=[current_image_path, dataset_state, current_image_np, points_state, labels_state, box_state, current_mask_state],
             outputs=[points_state, labels_state, current_mask_state, image_viewer]
         )
         
         clear_points_btn.click(
             on_clear_points,
+            inputs=[current_image_path, dataset_state, current_image_np, current_mask_state],
+            outputs=[points_state, labels_state, box_state, image_viewer]
+        )
+        
+        clear_mask_btn.click(
+            on_clear_mask,
+            inputs=[current_image_path, dataset_state, current_image_np, points_state, labels_state, box_state],
+            outputs=[current_mask_state, image_viewer]
+        )
+        
+        reset_img_btn.click(
+            on_reset_image,
             inputs=[current_image_path, dataset_state, current_image_np],
-            outputs=[points_state, labels_state, current_mask_state, image_viewer]
+            outputs=[points_state, labels_state, box_state, current_mask_state, image_viewer]
         )
         
         save_mask_btn.click(
             on_save_mask,
             inputs=[current_image_path, dataset_state, current_mask_state, class_name_input, current_image_np, points_state],
-            outputs=[dataset_state, current_mask_state, points_state, labels_state, image_viewer, objects_display]
+            outputs=[dataset_state, current_mask_state, points_state, labels_state, box_state, image_viewer, objects_display]
         )
         
         delete_btn.click(
             on_delete_mask,
-            inputs=[current_image_path, dataset_state, delete_idx_input, current_image_np],
+            inputs=[current_image_path, dataset_state, delete_idx_input, current_image_np, points_state, labels_state, box_state, current_mask_state],
             outputs=[dataset_state, image_viewer, objects_display]
         )
         

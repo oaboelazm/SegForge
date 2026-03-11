@@ -42,3 +42,44 @@ def generate_colors(num_colors=100):
     return np.random.randint(0, 255, size=(num_colors, 3), dtype=np.uint8).tolist()
 
 COLORS = generate_colors(100)
+
+def postprocess_mask(mask, morph_kernel_size=5):
+    """Clean up mask edges with morphological operations and fill holes."""
+    mask_uint8 = (mask * 255).astype(np.uint8)
+    kernel = np.ones((morph_kernel_size, morph_kernel_size), np.uint8)
+    
+    # Closing to remove small holes, then Opening to remove slight noise
+    closed_mask = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
+    opened_mask = cv2.morphologyEx(closed_mask, cv2.MORPH_OPEN, kernel)
+    
+    # Fill remaining internal holes
+    contours, _ = cv2.findContours(opened_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filled_mask = np.zeros_like(opened_mask)
+    cv2.drawContours(filled_mask, contours, -1, 255, thickness=cv2.FILLED)
+    
+    return filled_mask > 0
+
+def get_refinement_points(mask, num_points=20, dilation_iters=3):
+    """
+    Generate negative bounding points just outside the current mask.
+    This helps clean up fuzzy borders in subsequent segmentation loops.
+    """
+    mask_uint8 = (mask * 255).astype(np.uint8)
+    
+    # Find outer boundary by taking the difference between dilated and original mask
+    kernel = np.ones((3, 3), np.uint8)
+    dilated = cv2.dilate(mask_uint8, kernel, iterations=dilation_iters)
+    boundary = cv2.bitwise_xor(dilated, mask_uint8)
+    
+    # Get all boundary pixels
+    y_indices, x_indices = np.where(boundary > 0)
+    if len(y_indices) == 0:
+        return []
+        
+    points = list(zip(x_indices, y_indices))
+    
+    # Sub-sample uniformly to prevent passing thousands of points to SAM
+    step = max(1, len(points) // num_points)
+    sampled_points = points[::step][:num_points]
+    
+    return sampled_points

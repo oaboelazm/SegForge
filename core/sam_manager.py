@@ -37,16 +37,22 @@ class SAMManager:
             self.load_model()
         self.predictor.set_image(image_np)
         
-    def predict(self, points, labels):
+    def predict(self, points=None, labels=None, box=None):
         if self.predictor is None:
             raise RuntimeError("Model is not loaded. Please set image first.")
             
-        input_point = np.array(points)
-        input_label = np.array(labels)
+        input_point = np.array(points) if points and len(points) > 0 else None
+        input_label = np.array(labels) if labels and len(labels) > 0 else None
+        input_box = np.array(box) if box and len(box) == 4 else None
         
+        # SAM returns 3 overlapping masks when multimask_output=True
+        # We process them and extract the one with the highest confidence score.
         masks, scores, logits = self.predictor.predict(
             point_coords=input_point,
             point_labels=input_label,
-            multimask_output=False,
+            box=input_box,
+            multimask_output=True,
         )
-        return masks[0]
+        
+        best_mask_idx = np.argmax(scores)
+        return masks[best_mask_idx]
