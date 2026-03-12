@@ -3,7 +3,7 @@ import urllib.request
 import torch
 import numpy as np
 from sam2.build_sam import build_sam2
-from sam2.sam2_predictor import SAM2ImagePredictor
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 # SAM 2.1 Large Weights
 SAM_CHECKPOINT_URL = "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt"
