@@ -14,7 +14,16 @@ def create_app():
     
     with gr.Blocks(title="SegForge - SAM Dataset Engine") as app:
         gr.Markdown("# 🧠 SegForge - Segment Anything Dataset Engine")
-        gr.Markdown("Interactive and Batch Dataset Generation powered by SAM.")
+        
+        status_info = sam_manager.get_status_info()
+        color = "#28a745" if status_info["device"] == "cuda" else "#fd7e14" # Green for GPU, Orange for CPU
+        gr.HTML(f"""
+            <div style="background-color: {color}; color: white; padding: 10px; border-radius: 5px; margin-bottom: 20px; font-weight: bold; text-align: center;">
+                {status_info['full_status']}
+            </div>
+        """)
+        
+        gr.Markdown("Interactive and Batch Dataset Generation powered by SAM 2.1.")
         with gr.Tabs():
             with gr.TabItem("Interactive Annotation"):
                 # --- Tab 1: Interactive ---

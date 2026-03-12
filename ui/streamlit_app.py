@@ -56,7 +56,15 @@ def render_image(image_np, saved_objects, current_mask, points, labels):
 
 st.set_page_config(page_title="SegForge - SAM Dataset Engine", layout="wide")
 st.title("🧠 SegForge - Segment Anything Dataset Engine")
-st.markdown("Interactive and Batch Dataset Generation powered by SAM.")
+
+# Display Engine Status
+status_info = sam_manager.get_status_info()
+if status_info["device"] == "cuda":
+    st.success(status_info["full_status"])
+else:
+    st.warning(status_info["full_status"])
+
+st.markdown("Interactive and Batch Dataset Generation powered by SAM 2.1.")
 
 # Initialize session state variables
 if "dataset" not in st.session_state:

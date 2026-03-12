@@ -41,7 +41,11 @@ Segment specific objects in your images using multiple prompt modes:
 
 If a generated mask is slightly "fuzzy" or spills over the edges, use the **Refine Mask** button. This algorithm automatically detects the mask's boundary and places negative points just outside it to sharpen the edges.
 
-### 3. Morphological Post-processing
+### 3. CPU Optimization
+
+SegForge automatically detects your hardware and scales the model. It uses the **Tiny** SAM 2.1 variant on CPU for lag-free performance and the **Large** variant on GPU for maximum precision.
+
+### 4. Morphological Post-processing
 
 Every mask is automatically cleaned using:
 

@@ -15,6 +15,7 @@ A powerful, interactive, modular tool that helps you generate segmentation datas
 - **Dataset Management:** Label each discrete instance individually and review your image's objects interactively overlaying your results.
 - **One-Click Export:** Compile everything instantaneously into COCO JSON annotations, YOLO txt polygon formats, and raw `.png` bitmasks bundled cleanly inside a `.zip`.
 - **Dual Interfaces:** Features identically synced interfaces across Gradio (built for sharing and cloud work) or Streamlit (ideal for local analysis).
+- **CPU Optimized:** Automatically scales the model to a lightweight variant (SAM 2.1 Tiny) when running on CPU to ensure a smooth, lag-free experience on standard laptops.
 
 ## 🚀 Quickstart (Local)
 
