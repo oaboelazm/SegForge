@@ -2,7 +2,7 @@ gradio>=3.0.0
 streamlit>=1.20.0
 streamlit-image-coordinates>=0.1.6
 numpy
-opencv-python
+opencv-python-headless
 torch>=2.3.1
 torchvision>=0.18.1
 git+https://github.com/facebookresearch/sam2.git

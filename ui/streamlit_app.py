@@ -8,11 +8,13 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 # Ensure path includes project root
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from core.sam_manager import SAMManager
 from core.dataset_exporter import DatasetExporter
 from core.mask_utils import COLORS, postprocess_mask, get_refinement_points
 from core.batch_processor import process_batch_yolo
 
-st.set_page_config(layout="wide", page_title="SegForge SAM Annotator")
+# Global Page Config (MUST BE FIRST)
+st.set_page_config(page_title="SegForge - SAM Dataset Engine", layout="wide")
 
 TEMP_UPLOAD_DIR = "temp_uploads"
 os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
@@ -28,45 +30,37 @@ def get_exporter():
 sam_manager = get_sam_manager()
 exporter = get_exporter()
 
-def render_image(image_np, saved_objects, current_mask, points, labels):
+def render_image(image_np, saved_objects, current_mask, points, labels, box=None):
     if image_np is None:
         return None
     overlay = image_np.copy()
+    
+    # Draw saved objects
     for i, obj in enumerate(saved_objects):
         mask = obj["mask"]
         color = np.array(COLORS[i % len(COLORS)], dtype=np.uint8)
         mask_indices = mask > 0
         overlay[mask_indices] = overlay[mask_indices] * 0.7 + color * 0.3
         
+    # Draw current active mask prediction
     if current_mask is not None:
         color = np.array([0, 255, 0], dtype=np.uint8)
         mask_indices = current_mask > 0
         overlay[mask_indices] = overlay[mask_indices] * 0.5 + color * 0.5
         
-    # Draw bounding box
+    # Draw active bounding box
     if box and len(box) == 4:
         cv2.rectangle(overlay, (box[0], box[1]), (box[2], box[3]), (0, 0, 255), 2)
         
+    # Draw prompt points
     for pt, lbl in zip(points, labels):
         c = (0, 255, 0) if lbl == 1 else (255, 0, 0)
-        cv2.circle(overlay, (pt[0], pt[1]), 5, c, -1)
-        cv2.circle(overlay, (pt[0], pt[1]), 2, (255, 255, 255), -1)
+        cv2.circle(overlay, (int(pt[0]), int(pt[1])), 5, c, -1)
+        cv2.circle(overlay, (int(pt[0]), int(pt[1])), 2, (255, 255, 255), -1)
         
     return overlay
 
-st.set_page_config(page_title="SegForge - SAM Dataset Engine", layout="wide")
-st.title("🧠 SegForge - Segment Anything Dataset Engine")
-
-# Display Engine Status
-status_info = sam_manager.get_status_info()
-if status_info["device"] == "cuda":
-    st.success(status_info["full_status"])
-else:
-    st.warning(status_info["full_status"])
-
-st.markdown("Interactive and Batch Dataset Generation powered by SAM 2.1.")
-
-# Initialize session state variables
+# --- Session State Initialization ---
 if "dataset" not in st.session_state:
     st.session_state.dataset = {}
 if "points" not in st.session_state:
@@ -81,39 +75,42 @@ if "current_filepath" not in st.session_state:
     st.session_state.current_filepath = None
 if "image_np" not in st.session_state:
     st.session_state.image_np = None
+if "tracked_filepaths" not in st.session_state:
+    st.session_state.tracked_filepaths = []
 
-tab_interactive, tab_batch = st.tabs(["Interactive Annotation", "Batch Conversion (Det -> Seg)"])
 
-with tab_interactive:
-    col1, col2 = st.columns([1, 2])
+# --- Sidebar UI ---
+with st.sidebar:
+    st.image("https://raw.githubusercontent.com/oaboelazm/SegForge/main/assets/logo.png", width=100) # Placeholder for logo if exists
+    st.title("SegForge Controls")
     
-    with col1:
-        st.markdown("### 1. Upload & Select Images")
-        uploaded_files = st.file_uploader("Upload Local Images", type=["jpg", "jpeg", "png", "bmp"], accept_multiple_files=True)
-        
-        filepaths = []
+    # Engine status in sidebar
+    status_info = sam_manager.get_status_info()
+    st.info(f"🚀 {status_info['full_status']}")
+    
+    st.divider()
+    
+    st.header("1. Data Input")
+    uploaded_files = st.file_uploader("Upload Image(s)", type=["jpg", "jpeg", "png", "bmp"], accept_multiple_files=True)
+    
     if uploaded_files:
         for file in uploaded_files:
             filepath = os.path.join(TEMP_UPLOAD_DIR, file.name)
-            # Only dump file if it doesn't already exist or it was updated
             if not os.path.exists(filepath):
                 with open(filepath, "wb") as f:
                     f.write(file.getbuffer())
-                    
-            if filepath not in filepaths:
-                filepaths.append(filepath)
-                
+            if filepath not in st.session_state.tracked_filepaths:
+                st.session_state.tracked_filepaths.append(filepath)
             if filepath not in st.session_state.dataset:
                 st.session_state.dataset[filepath] = {"objects": []}
-                
-    st.markdown(f"Total images tracked in instance: {len(st.session_state.dataset.keys())}")
-    
+
     selected_file = st.selectbox(
-        "Select Opened Image to Annotate", 
-        list(st.session_state.dataset.keys()), 
-        format_func=lambda x: os.path.basename(x) if x else ""
+        "Active Image", 
+        st.session_state.tracked_filepaths, 
+        format_func=lambda x: os.path.basename(x) if x else "None"
     )
-    
+
+    # Change detected -> handle load
     if selected_file != st.session_state.current_filepath:
         st.session_state.current_filepath = selected_file
         st.session_state.points = []
@@ -124,28 +121,29 @@ with tab_interactive:
         if selected_file and os.path.exists(selected_file):
             img = cv2.imread(selected_file)
             st.session_state.image_np = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            with st.spinner(f"Setting image embeddings for {os.path.basename(selected_file)}..."):
+            with st.spinner("Setting embeddings..."):
                 sam_manager.set_image(st.session_state.image_np)
         else:
             st.session_state.image_np = None
 
-    st.markdown("### 2. Segmentation Settings")
-    point_type = st.radio("Selection Mode", ["Positive Point", "Negative Point", "Bounding Box"])
+    st.divider()
+    st.header("2. Prompt Settings")
+    point_type = st.radio("Mode", ["Positive Point", "Negative Point", "Bounding Box"], horizontal=True)
     
     col_a, col_b = st.columns(2)
     with col_a:
-        if st.button("Generate Mask", type="primary"):
+        if st.button("Generate", use_container_width=True, type="primary"):
             valid_box = st.session_state.box if len(st.session_state.box) == 4 else None
             if not st.session_state.points and not valid_box:
-                st.warning("Add at least one point or bounding box first!")
+                st.warning("Needs prompt!")
             else:
                 raw_mask = sam_manager.predict(points=st.session_state.points, labels=st.session_state.labels, box=valid_box)
                 st.session_state.current_mask = postprocess_mask(raw_mask)
                 st.rerun()
     with col_b:
-        if st.button("Refine Mask", type="secondary"):
+        if st.button("Refine", use_container_width=True):
             if st.session_state.current_mask is None:
-                st.warning("Generate a mask first before refining!")
+                st.warning("Gen mask first!")
             else:
                 neg_pts = get_refinement_points(st.session_state.current_mask, num_points=15, dilation_iters=2)
                 for pt in neg_pts:
@@ -155,35 +153,21 @@ with tab_interactive:
                 raw_mask = sam_manager.predict(points=st.session_state.points, labels=st.session_state.labels, box=valid_box)
                 st.session_state.current_mask = postprocess_mask(raw_mask)
                 st.rerun()
-                
-    st.write("---")
-    
-    col_c, col_d, col_e = st.columns(3)
-    with col_c:
-        if st.button("Clear Prompts"):
-            st.session_state.points = []
-            st.session_state.labels = []
-            st.session_state.box = []
-            st.rerun()
-    with col_d:
-        if st.button("Clear Mask"):
-            st.session_state.current_mask = None
-            st.rerun()
-    with col_e:
-        if st.button("Reset Image"):
-            st.session_state.points = []
-            st.session_state.labels = []
-            st.session_state.box = []
-            st.session_state.current_mask = None
-            st.rerun()
-        
-    st.markdown("### 3. Mask Management")
-    class_name = st.text_input("Class Label", placeholder="e.g., car, person, dog")
-    if st.button("Save Object & Mask", type="primary"):
-        if st.session_state.current_mask is None or len(st.session_state.points) == 0:
-            st.warning("No mask detected! Click on the image first to segment.")
+
+    if st.button("Clear Prompts", use_container_width=True):
+        st.session_state.points = []
+        st.session_state.labels = []
+        st.session_state.box = []
+        st.rerun()
+
+    st.divider()
+    st.header("3. Label & Save")
+    class_name = st.text_input("Class Name", placeholder="e.g. car")
+    if st.button("💾 Save Object", use_container_width=True, type="secondary"):
+        if st.session_state.current_mask is None:
+            st.warning("No mask!")
         elif not class_name:
-            st.warning("Enter a class label first!")
+            st.warning("No label!")
         else:
             st.session_state.dataset[st.session_state.current_filepath]["objects"].append({
                 "mask": st.session_state.current_mask,
@@ -193,30 +177,31 @@ with tab_interactive:
             st.session_state.labels = []
             st.session_state.box = []
             st.session_state.current_mask = None
-            st.success(f"Saved mask for class '{class_name}'.")
+            st.toast(f"Saved {class_name}!")
             st.rerun()
-            
-    st.markdown("### 4. Export")
-    if st.button("Prepare Dataset Export (ZIP)", type="primary"):
+
+    st.divider()
+    if st.button("📥 Export ZIP", use_container_width=True):
         if not st.session_state.dataset:
-            st.warning("Dataset is empty. Please upload images and annotate first.")
+            st.error("Empty dataset!")
         else:
-            with st.spinner("Preparing export bundle..."):
+            with st.spinner("Zipping..."):
                 zip_path = exporter.export(st.session_state.dataset)
             with open(zip_path, "rb") as fp:
-                st.download_button(
-                    label="⬇️ Download Output Dataset ZIP",
-                    data=fp,
-                    file_name="dataset_export.zip",
-                    mime="application/zip",
-                )
+                st.download_button("Download ZIP", data=fp, file_name="exported_masks.zip", use_container_width=True)
 
-with col2:
+
+# --- Main Application Area ---
+st.title("🧠 SegForge - Segment Anything Engine")
+
+tab_interactive, tab_batch = st.tabs(["🖌️ Interactive Annotation", "📦 Batch Processing"])
+
+with tab_interactive:
     if st.session_state.image_np is not None:
         saved_objects = st.session_state.dataset.get(st.session_state.current_filepath, {}).get("objects", [])
         
-        # Render composite layout
-        rendered_image = render_image(
+        # Render the preview
+        rendered = render_image(
             st.session_state.image_np,
             saved_objects,
             st.session_state.current_mask,
@@ -225,10 +210,10 @@ with col2:
             st.session_state.box
         )
         
-        st.markdown("**Interactive View (Click/Drag depending on mode)**")
-        coords = streamlit_image_coordinates(rendered_image, key=f"img_coords_{len(st.session_state.points)}_{len(st.session_state.box)}")
+        st.caption("Click to add points, or two clicks for Bounding Box corners.")
+        coords = streamlit_image_coordinates(rendered, key=f"img_{len(st.session_state.points)}_{len(st.session_state.box)}")
         
-        if coords is not None:
+        if coords:
             x, y = coords['x'], coords['y']
             if "Bounding Box" in point_type:
                 if len(st.session_state.box) == 0 or len(st.session_state.box) == 4:
@@ -239,109 +224,66 @@ with col2:
             else:
                 st.session_state.points.append([x, y])
                 st.session_state.labels.append(1 if "Positive" in point_type else 0)
-                
             st.rerun()
             
-        st.markdown("**Saved Objects for Current Image**")
-        if saved_objects:
-            obj_data = [{"ID": i, "Class Name": obj["class_name"]} for i, obj in enumerate(saved_objects)]
-            st.table(obj_data)
-            
-            del_id = st.number_input("Object ID to Delete", min_value=0, max_value=len(saved_objects)-1, step=1)
-            if st.button("Delete Mask by ID"):
-                st.session_state.dataset[st.session_state.current_filepath]["objects"].pop(int(del_id))
-                st.rerun()
-        else:
-            st.info("No objects saved yet for this image.")
+        with st.expander("Object List Management"):
+            if saved_objects:
+                for i, obj in enumerate(saved_objects):
+                    cols = st.columns([4, 1])
+                    cols[0].write(f"ID {i}: {obj['class_name']}")
+                    if cols[1].button("🗑️", key=f"del_{i}"):
+                        st.session_state.dataset[st.session_state.current_filepath]["objects"].pop(i)
+                        st.rerun()
+            else:
+                st.write("No objects saved for this image.")
     else:
-        st.info("Upload and select an image to start annotating.")
-        
+        st.info("👈 Upload and select an image from the sidebar to begin.")
+
 
 with tab_batch:
-    st.header("Batch Conversion (Detection -> Segmentation)")
-    st.markdown("Upload a zip containing your `images` and `labels` directories to automatically scale YOLO bounding boxes into exact structural SAM masks.")
+    st.header("Bulk Conversion (YOLO -> SAM)")
+    st.info("Upload a ZIP containing 'images' and 'labels' folders.")
     
-    batch_zip = st.file_uploader("Upload YOLO Dataset (.zip)", type=["zip"], key="batch_zip_uploader")
+    batch_zip = st.file_uploader("Upload YOLO ZIP", type=["zip"])
     
-    if batch_zip is not None:
-        if st.button("Start Bulk Conversion", type="primary"):
-            import zipfile
-            import tempfile
-            import shutil
+    if batch_zip and st.button("🚀 Process All", type="primary"):
+        import zipfile, tempfile, shutil
+        temp_dir = tempfile.mkdtemp()
+        try:
+            with zipfile.ZipFile(batch_zip, 'r') as z:
+                z.extractall(temp_dir)
             
-            temp_dir = tempfile.mkdtemp()
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+            # Simple dir check
+            img_dir = os.path.join(temp_dir, 'images')
+            lbl_dir = os.path.join(temp_dir, 'labels')
             
-            status_text.text("Extracting ZIP archive...")
-            with zipfile.ZipFile(batch_zip, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
+            if not os.path.exists(img_dir):
+                # check subfolders
+                for d in os.listdir(temp_dir):
+                    if os.path.isdir(os.path.join(temp_dir, d, 'images')):
+                        img_dir = os.path.join(temp_dir, d, 'images')
+                        lbl_dir = os.path.join(temp_dir, d, 'labels')
+                        break
+            
+            if os.path.exists(img_dir):
+                prog = st.progress(0)
+                def cb(p, t): prog.progress(p, text=t)
                 
-            # Locate directories (Standard YOLO format requirement)
-            extracted_images_dir = os.path.join(temp_dir, 'images')
-            extracted_labels_dir = os.path.join(temp_dir, 'labels')
-            
-            if not os.path.exists(extracted_images_dir) or not os.path.exists(extracted_labels_dir):
-                top_level_items = os.listdir(temp_dir)
-                if len(top_level_items) == 1 and os.path.isdir(os.path.join(temp_dir, top_level_items[0])):
-                    sub_dir = os.path.join(temp_dir, top_level_items[0])
-                    extracted_images_dir = os.path.join(sub_dir, 'images')
-                    extracted_labels_dir = os.path.join(sub_dir, 'labels')
-
-            if not os.path.exists(extracted_images_dir) or not os.path.exists(extracted_labels_dir):
-                st.error("Invalid YOLO ZIP structure. Ensure it contains 'images/' and 'labels/' folders.")
+                out_zip, previews = process_batch_yolo(img_dir, lbl_dir, sam_manager, exporter, progress_callback=cb)
+                st.session_state.batch_previews = previews
+                
+                with open(out_zip, "rb") as f:
+                    st.download_button("📥 Download Result", f, file_name="batch_sam_export.zip")
             else:
-                try:
-                    def update_progress(p, desc):
-                        progress_bar.progress(p)
-                        status_text.text(desc)
-
-                    out_zip, previews = process_batch_yolo(
-                        extracted_images_dir,
-                        extracted_labels_dir,
-                        sam_manager,
-                        exporter,
-                        progress_callback=update_progress
-                    )
-                    
-                    st.success("Conversion Complete!")
-                    st.session_state["batch_previews"] = previews
-                    
-                    with open(out_zip, "rb") as fp:
-                        st.download_button(
-                            label="⬇️ Download Exported Dataset ZIP",
-                            data=fp,
-                            file_name="batch_segmented_dataset.zip",
-                            mime="application/zip",
-                        )
-                        
-    if "batch_previews" in st.session_state and st.session_state["batch_previews"]:
-        st.markdown("---")
-        st.markdown("### Visual Validation Sample")
-        
-        import random
-        # Store selected indices in session state to maintain them across button clicks
-        if "selected_preview_indices" not in st.session_state:
-            st.session_state["selected_preview_indices"] = random.sample(
-                range(len(st.session_state["batch_previews"])), 
-                min(len(st.session_state["batch_previews"]), 4)
-            )
-            
-        if st.button("🎲 Randomize Preview Samples"):
-            st.session_state["selected_preview_indices"] = random.sample(
-                range(len(st.session_state["batch_previews"])), 
-                min(len(st.session_state["batch_previews"]), 4)
-            )
-            
-        cols = st.columns(2)
-        for i, idx in enumerate(st.session_state["selected_preview_indices"]):
-            view = st.session_state["batch_previews"][idx]
-            with cols[i % 2]:
-                st.image(view, use_container_width=True)
-                                    
-                except Exception as e:
-                    st.error(f"Failed processing: {str(e)}")
-                        
+                st.error("Missing 'images' folder in ZIP.")
+        finally:
             shutil.rmtree(temp_dir)
-            status_text.empty()
-            progress_bar.empty()
+
+    if "batch_previews" in st.session_state:
+        st.divider()
+        st.subheader("Results Preview")
+        cols = st.columns(2)
+        import random
+        idxs = random.sample(range(len(st.session_state.batch_previews)), min(4, len(st.session_state.batch_previews)))
+        for i, idx in enumerate(idxs):
+            cols[i%2].image(st.session_state.batch_previews[idx])
