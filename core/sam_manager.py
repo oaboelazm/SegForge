@@ -2,6 +2,7 @@ import os
 import urllib.request
 import torch
 import numpy as np
+from tqdm import tqdm
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
@@ -24,7 +25,13 @@ class SAMManager:
     def download_weights(self):
         if not os.path.exists(SAM_CHECKPOINT_PATH):
             print(f"Downloading SAM 2.1 weights to {SAM_CHECKPOINT_PATH}. This may take a few minutes...")
-            urllib.request.urlretrieve(SAM_CHECKPOINT_URL, SAM_CHECKPOINT_PATH)
+            
+            with tqdm(unit='B', unit_scale=True, unit_divisor=1024, miniters=1, desc=SAM_CHECKPOINT_PATH) as t:
+                def reporthook(blocknum, blocksize, totalsize):
+                    t.total = totalsize
+                    t.update(blocknum * blocksize - t.n)
+
+                urllib.request.urlretrieve(SAM_CHECKPOINT_URL, SAM_CHECKPOINT_PATH, reporthook=reporthook)
             print("Download complete.")
             
     def load_model(self):

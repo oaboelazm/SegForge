@@ -1,10 +1,10 @@
 # SegForge
 
-A powerful, interactive, modular tool that helps you generate segmentation datasets from images using the Segment Anything Model (SAM). Runs seamlessly on your local machine, Google Colab, or Kaggle.
+A powerful, interactive, modular tool that helps you generate segmentation datasets from images using the Segment Anything Model (SAM2.1). Runs seamlessly on your local machine, Google Colab, or Kaggle.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/oaboelazm/SegForge/blob/main/notebooks/SegForge_Interactive_Notebook.ipynb) [![Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/oaboelazm/SegForge/blob/main/notebooks/SegForge_Interactive_Notebook.ipynb)
 
-[**Full English Documentation 📖**](file:///c:/Users/dell/Desktop/Projects/26/SegForge/DOCUMENTATION.md)
+[**Full Documentation 📖**](https://github.com/oaboelazm/SegForge/blob/main/DOCUMENTATION.md)
 
 ## ✨ Capabilities
 
@@ -25,13 +25,13 @@ git clone https://github.com/oaboelazm/SegForge.git
 cd SegForge
 ```
 
-2. Install Requirements:
+2. **Setup the environment** (includes a progress bar for dependencies):
 
 ```bash
-pip install -r requirements.txt
+python setup_SegForge.py
 ```
 
-3. Launch App:
+3. **Launch App**:
 
 **Option A (Gradio - Default):**
 
@@ -39,15 +39,14 @@ pip install -r requirements.txt
 python app.py
 ```
 
-A local interface URL and a public shareable URL will be generated!
-
 **Option B (Streamlit - Alternative):**
 
 ```bash
 python app_streamlit.py
 ```
 
-A local Streamlit interface URL will be generated!
+> [!TIP]
+> On the first run, looking for a progress bar? The system will download the SAM 2.1 weights and show you a real-time status tracker in your terminal!
 
 ## ☁️ Cloud 1-Click Installation
 
@@ -58,7 +57,7 @@ Simply click on the **Open In Colab** or **Kaggle** badges at the top of the rep
 ```
 SegForge/
 ├── core/
-│   ├── sam_manager.py       # Core SAM inference engine (Points, Multi-mask, Boxes)
+│   ├── sam_manager.py       # Core SAM inference engine (SAM 2.1)
 │   ├── dataset_exporter.py  # COCO & YOLO semantic format converters
 │   ├── mask_utils.py        # Mask Refinement & Post-processing Algorithms
 │   └── batch_processor.py   # Bulk Detection -> Segmentation Logic
@@ -70,5 +69,6 @@ SegForge/
 ├── .gitignore
 ├── app.py                   # Gradio execution entry point
 ├── app_streamlit.py         # Streamlit execution entry point
+├── setup_SegForge.py         # Informative Environment setup script
 └── requirements.txt         # Dependencies
 ```

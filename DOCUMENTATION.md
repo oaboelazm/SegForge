@@ -1,6 +1,6 @@
 # SegForge Documentation 🚀
 
-Welcome to the official documentation for **SegForge**, a modular and interactive dataset generation tool powered by the **Segment Anything Model (SAM)**.
+Welcome to the official documentation for **SegForge**, a modular and interactive dataset generation tool powered by the **Segment Anything Model (SAM2.1)**.
 
 ---
 
@@ -15,7 +15,7 @@ SegForge is designed to bridge the gap between simple object detection and high-
 The project is built with a modular architecture to ensure maintainability and scalability:
 
 - **`core/`**: The brain of the application.
-  - `sam_manager.py`: Handles SAM model loading, point/box inference, and confidence-based mask selection.
+  - `sam_manager.py`: Handles SAM 2.1 model loading, point/box inference, and confidence-based mask selection.
   - `batch_processor.py`: Automates the conversion of YOLO detection datasets into segmentation masks.
   - `dataset_exporter.py`: Logic for exporting results into COCO JSON, YOLO Polygon TXT, and PNG formats.
   - `mask_utils.py`: Contains morphological post-processing scripts and refinement point generation algorithms.
@@ -23,6 +23,7 @@ The project is built with a modular architecture to ensure maintainability and s
   - `gradio_app.py`: Layout for the Gradio-based interface (ideal for cloud/sharing).
   - `streamlit_app.py`: Layout for the Streamlit-based interface (ideal for local/heavy usage).
 - **`app.py` / `app_streamlit.py`**: Entry points for launching the respective UIs.
+- **`setup_project.py`**: Dedicated script for installing dependencies with real-time feedback.
 
 ---
 
@@ -64,13 +65,17 @@ Transform an entire **YOLO Object Detection** dataset into a **Segmentation** da
 ### Getting Started Locally
 
 1. **Clone the repo.**
-2. **Install dependencies**:
+2. **Setup the environment**:
+   Use the provided setup script to see installation progress:
    ```bash
-   pip install -r requirements.txt
+   python setup_SegForge.py
    ```
 3. **Run the app**:
    - Gradio: `python app.py`
    - Streamlit: `streamlit run app_streamlit.py`
+
+> [!IMPORTANT]
+> **Weight Download Progress**: On the first run, SegForge will download the SAM 2.1 weights (~800MB). A `tqdm` progress bar will appear in your console showing the download speed and estimated time remaining.
 
 ### Interactive Mode Workflow
 
@@ -93,8 +98,9 @@ Transform an entire **YOLO Object Detection** dataset into a **Segmentation** da
    │   ├── img1.jpg
    │   └── img2.jpg
    └── labels/
-       ├── img1.txt (YOLO format: class x_center y_center width height)
-       └── img2.txt
+   │   ├── img1.txt (YOLO format: class x_center y_center width height)
+   │   └── img2.txt
+   └── classes.txt (Optional: List of class names, one per line)
    ```
 3. Click **Start Bulk Conversion**.
 4. Review the **Visual Validation Gallery** to check accuracy.
@@ -116,8 +122,8 @@ SegForge exports a complete package ready for training:
 ## ⚙️ Requirements
 
 - Python 3.9+
-- PyTorch (CUDA recommended)
-- Segment Anything (SAM)
+- PyTorch (CUDA recommended, PyTorch 2.3+ for SAM 2.1)
+- SAM 2.1 (`sam2` package)
 - OpenCV
 - Gradio or Streamlit
 
